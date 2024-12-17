@@ -37,7 +37,8 @@ class DiceRandom(ExplainerBase):
 
     def _generate_counterfactuals(self, query_instance, total_CFs, desired_range=None,
                                   desired_class="opposite", permitted_range=None,
-                                  features_to_vary="all", stopping_threshold=0.5, posthoc_sparsity_param=0.1,
+                                  features_to_vary="all", features_to_copy_dict=None,
+                                  stopping_threshold=0.5, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", sample_size=1000, random_seed=None, verbose=False,
                                   limit_steps_ls=10000):
         """Generate counterfactuals by randomly sampling features.
@@ -51,6 +52,8 @@ class DiceRandom(ExplainerBase):
                                 Defaults to the range inferred from training data. If None, uses the parameters
                                 initialized in data_interface.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
+        :param features_to_copy_dict: customized diction to force dice to copy the changes to value columns 
+                                        if key columns have been changed.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
         :param posthoc_sparsity_param: Parameter for the post-hoc operation on continuous features to enhance sparsity.
         :param posthoc_sparsity_algorithm: Perform either linear or binary search. Takes "linear" or "binary".
@@ -63,8 +66,9 @@ class DiceRandom(ExplainerBase):
 
         :returns: A CounterfactualExamples object that contains the dataframe of generated counterfactuals as an attribute.
         """
+        
         self.features_to_vary = self.setup(features_to_vary, permitted_range, query_instance, feature_weights=None)
-
+    
         if features_to_vary == "all":
             self.fixed_features_values = {}
         else:
@@ -76,6 +80,7 @@ class DiceRandom(ExplainerBase):
         # Do predictions once on the query_instance and reuse across to reduce the number
         # inferences.
         model_predictions = self.predict_fn(query_instance)
+
         # number of output nodes of ML model
         self.num_output_nodes = None
         if self.model.model_type == ModelTypes.Classifier:
@@ -113,8 +118,19 @@ class DiceRandom(ExplainerBase):
         for num_features_to_vary in range(1, len(self.features_to_vary)+1):
             selected_features = np.random.choice(self.features_to_vary, (sample_size, 1), replace=True)
             for k in range(sample_size):
+                
                 candidate_cfs.at[k, selected_features[k][0]] = random_instances.at[k, selected_features[k][0]]
+                
+                
+                if features_to_copy_dict is not None:
+                    if selected_features[k][0] in features_to_copy_dict.keys():
+                        for f in features_to_copy_dict[selected_features[k][0]]:
+                            candidate_cfs.at[k, f] = random_instances.at[k, selected_features[k][0]]
+                    
+                    
+                
             scores = self.predict_fn(candidate_cfs)
+        
             validity = self.decide_cf_validity(scores)
             if sum(validity) > 0:
                 rows_to_add = candidate_cfs[validity == 1]
@@ -180,11 +196,7 @@ class DiceRandom(ExplainerBase):
 
         self.elapsed = timeit.default_timer() - start_time
         m, s = divmod(self.elapsed, 60)
-
-        # decoding to original label
-        test_instance_df, final_cfs_df, final_cfs_df_sparse = \
-            self.decode_to_original_labels(test_instance_df, final_cfs_df, final_cfs_df_sparse)
-        if final_cfs_df is not None:
+        if self.valid_cfs_found:
             if verbose:
                 print('Diverse Counterfactuals found! total time taken: %02d' %
                       m, 'min %02d' % s, 'sec')
@@ -197,14 +209,12 @@ class DiceRandom(ExplainerBase):
                       'Diverse Counterfactuals found for the given configuration, perhaps try with different parameters...',
                       '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
 
-        desired_class_param = self.decode_model_output(pd.Series(self.target_cf_class))[0] \
-            if hasattr(self, 'target_cf_class') else desired_class
         return exp.CounterfactualExamples(data_interface=self.data_interface,
                                           final_cfs_df=final_cfs_df,
                                           test_instance_df=test_instance_df,
                                           final_cfs_df_sparse=final_cfs_df_sparse,
                                           posthoc_sparsity_param=posthoc_sparsity_param,
-                                          desired_class=desired_class_param,
+                                          desired_class=desired_class,
                                           desired_range=desired_range,
                                           model_type=self.model.model_type)
 
