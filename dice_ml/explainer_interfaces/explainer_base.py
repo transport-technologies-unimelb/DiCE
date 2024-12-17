@@ -5,16 +5,15 @@
 import pickle
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Any, List
 
 import numpy as np
 import pandas as pd
-from raiutils.exceptions import UserConfigValidationException
 from sklearn.neighbors import KDTree
 from tqdm import tqdm
 
 from dice_ml.constants import ModelTypes, _PostHocSparsityTypes
 from dice_ml.counterfactual_explanations import CounterfactualExplanations
+from dice_ml.utils.exception import UserConfigValidationException
 
 
 class ExplainerBase(ABC):
@@ -48,24 +47,6 @@ class ExplainerBase(ABC):
         # self.cont_precisions = \
         #   [self.data_interface.get_decimal_precisions()[ix] for ix in self.encoded_continuous_feature_indexes]
 
-    def _find_features_having_missing_values(
-            self, data: Any) -> List[str]:
-        """Return list of features which have missing values.
-
-        :param data: The dataset to check.
-        :type data: Any
-        :return: List of feature names which have missing values.
-        :rtype: List[str]
-        """
-        if not isinstance(data, pd.DataFrame):
-            return []
-
-        list_of_feature_having_missing_values = []
-        for feature in data.columns.tolist():
-            if np.any(data[feature].isnull()):
-                list_of_feature_having_missing_values.append(feature)
-        return list_of_feature_having_missing_values
-
     def _validate_counterfactual_configuration(
             self, query_instances, total_CFs,
             desired_class="opposite", desired_range=None,
@@ -73,55 +54,62 @@ class ExplainerBase(ABC):
             stopping_threshold=0.5, posthoc_sparsity_param=0.1,
             posthoc_sparsity_algorithm="linear", verbose=False, **kwargs):
 
-        if len(self._find_features_having_missing_values(query_instances)) > 0:
-            raise UserConfigValidationException(
-                "The query instance(s) should not have any missing values. "
-                "Please impute the missing values and try again."
-            )
-
         if total_CFs <= 0:
+            print('total_CFs <= 0')
             raise UserConfigValidationException(
                 "The number of counterfactuals generated per query instance (total_CFs) should be a positive integer.")
 
         if features_to_vary != "all":
             if len(features_to_vary) == 0:
+                print('len(features_to_vary) == 0')
                 raise UserConfigValidationException("Some features need to be varied for generating counterfactuals.")
 
         if posthoc_sparsity_algorithm not in _PostHocSparsityTypes.ALL:
+            print( 'posthoc_sparsity_algorithm not in _PostHocSparsityTypes.ALL')
             raise UserConfigValidationException(
                 'The posthoc_sparsity_algorithm should be {0} and not {1}'.format(
                     ' or '.join(_PostHocSparsityTypes.ALL), posthoc_sparsity_algorithm)
                 )
 
         if stopping_threshold < 0.0 or stopping_threshold > 1.0:
+            print('stopping_threshold < 0.0 or stopping_threshold > 1.0')
             raise UserConfigValidationException('The stopping_threshold should lie between {0} and {1}'.format(
                 str(0.0), str(1.0)))
 
         if posthoc_sparsity_param is not None and (posthoc_sparsity_param < 0.0 or posthoc_sparsity_param > 1.0):
+            print('posthoc_sparsity_param is not None and (posthoc_sparsity_param < 0.0 or posthoc_sparsity_param > 1.0)')
             raise UserConfigValidationException('The posthoc_sparsity_param should lie between {0} and {1}'.format(
                 str(0.0), str(1.0)))
 
         if self.model is not None and self.model.model_type == ModelTypes.Classifier:
+            
             if desired_range is not None:
+                print('self.model is not None and self.model.model_type == ModelTypes.Classifier')
                 raise UserConfigValidationException(
                     'The desired_range parameter should not be set for classification task')
 
         if self.model is not None and self.model.model_type == ModelTypes.Regressor:
+            
             if desired_range is None:
+                print('self.model is not None and self.model.model_type == ModelTypes.Regressor')
                 raise UserConfigValidationException(
                     'The desired_range parameter should be set for regression task')
 
         if desired_range is not None:
             if len(desired_range) != 2:
+                print("The parameter desired_range needs to have two numbers in ascending order.")
                 raise UserConfigValidationException(
                     "The parameter desired_range needs to have two numbers in ascending order.")
             if desired_range[0] > desired_range[1]:
+                print("The range provided in desired_range should be in ascending order.")
                 raise UserConfigValidationException(
                     "The range provided in desired_range should be in ascending order.")
+
 
     def generate_counterfactuals(self, query_instances, total_CFs,
                                  desired_class="opposite", desired_range=None,
                                  permitted_range=None, features_to_vary="all",
+                                 features_to_copy_dict=None,
                                  stopping_threshold=0.5, posthoc_sparsity_param=0.1,
                                  proximity_weight=0.2, sparsity_weight=0.2, diversity_weight=5.0,
                                  categorical_penalty=0.1,
@@ -163,6 +151,7 @@ class ExplainerBase(ABC):
         :returns: A CounterfactualExplanations object that contains the list of
                   counterfactual examples per query_instance as one of its attributes.
         """
+
         self._validate_counterfactual_configuration(
             query_instances=query_instances,
             total_CFs=total_CFs,
@@ -173,6 +162,8 @@ class ExplainerBase(ABC):
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm, verbose=verbose,
             kwargs=kwargs
         )
+        # print(features_to_copy_dict)
+        # print('ZZZZZZZZZZZZZZ')
 
         cf_examples_arr = []
         query_instances_list = []
@@ -181,6 +172,8 @@ class ExplainerBase(ABC):
                 query_instances_list.append(query_instances[ix:(ix+1)])
         elif isinstance(query_instances, Iterable):
             query_instances_list = query_instances
+            
+
         for query_instance in tqdm(query_instances_list):
             self.data_interface.set_continuous_feature_indexes(query_instance)
             res = self._generate_counterfactuals(
@@ -189,19 +182,12 @@ class ExplainerBase(ABC):
                 desired_range=desired_range,
                 permitted_range=permitted_range,
                 features_to_vary=features_to_vary,
+                features_to_copy_dict=features_to_copy_dict,
                 stopping_threshold=stopping_threshold,
                 posthoc_sparsity_param=posthoc_sparsity_param,
                 posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
                 verbose=verbose,
                 **kwargs)
-            res.test_instance_df = self.data_interface.ensure_consistent_type(
-                    res.test_instance_df, query_instance)
-            if res.final_cfs_df is not None and len(res.final_cfs_df) > 0:
-                res.final_cfs_df = self.data_interface.ensure_consistent_type(
-                    res.final_cfs_df, query_instance)
-            if res.final_cfs_df_sparse is not None and len(res.final_cfs_df_sparse) > 0:
-                res.final_cfs_df_sparse = self.data_interface.ensure_consistent_type(
-                    res.final_cfs_df_sparse, query_instance)
             cf_examples_arr.append(res)
         self._check_any_counterfactuals_computed(cf_examples_arr=cf_examples_arr)
 
@@ -565,8 +551,8 @@ class ExplainerBase(ABC):
             for feature in features_sorted:
                 # current_pred = self.predict_fn_for_sparsity(final_cfs_sparse.iat[[cf_ix]][self.data_interface.feature_names])
                 # feat_ix = self.data_interface.continuous_feature_names.index(feature)
-                diff = query_instance[feature].iat[0] - final_cfs_sparse.at[cf_ix, feature]
-                if (abs(diff) <= quantiles[feature]):
+                diff = query_instance[feature].iat[0] - int(final_cfs_sparse.at[cf_ix, feature])
+                if(abs(diff) <= quantiles[feature]):
                     if posthoc_sparsity_algorithm == "linear":
                         final_cfs_sparse = self.do_linear_search(diff, decimal_prec, query_instance, cf_ix,
                                                                  feature, final_cfs_sparse, current_pred, limit_steps_ls)
@@ -591,19 +577,20 @@ class ExplainerBase(ABC):
         current_pred = current_pred_orig
         count_steps = 0
         if self.model.model_type == ModelTypes.Classifier:
-            while ((abs(diff) > 10e-4) and (np.sign(diff*old_diff) > 0) and
-                    self.is_cf_valid(current_pred)) and (count_steps < limit_steps_ls):
+            while((abs(diff) > 10e-4) and (np.sign(diff*old_diff) > 0) and
+                  self.is_cf_valid(current_pred)) and (count_steps < limit_steps_ls):
 
-                old_val = final_cfs_sparse.at[cf_ix, feature]
+                old_val = int(final_cfs_sparse.at[cf_ix, feature])
                 final_cfs_sparse.at[cf_ix, feature] += np.sign(diff)*change
                 current_pred = self.predict_fn_for_sparsity(final_cfs_sparse.loc[[cf_ix]][self.data_interface.feature_names])
                 old_diff = diff
 
                 if not self.is_cf_valid(current_pred):
                     final_cfs_sparse.at[cf_ix, feature] = old_val
+                    diff = query_instance[feature].iat[0] - int(final_cfs_sparse.at[cf_ix, feature])
                     return final_cfs_sparse
 
-                diff = query_instance[feature].iat[0] - final_cfs_sparse.at[cf_ix, feature]
+                diff = query_instance[feature].iat[0] - int(final_cfs_sparse.at[cf_ix, feature])
 
                 count_steps += 1
 
@@ -613,7 +600,7 @@ class ExplainerBase(ABC):
         """Performs a binary search between continuous features of a CF and corresponding values
            in query_instance until the prediction class changes."""
 
-        old_val = final_cfs_sparse.at[cf_ix, feature]
+        old_val = int(final_cfs_sparse.at[cf_ix, feature])
         final_cfs_sparse.at[cf_ix, feature] = query_instance[feature].iat[0]
         # Prediction of the query instance
         current_pred = self.predict_fn_for_sparsity(final_cfs_sparse.loc[[cf_ix]][self.data_interface.feature_names])
@@ -626,7 +613,7 @@ class ExplainerBase(ABC):
 
         # move the CF values towards the query_instance
         if diff > 0:
-            left = final_cfs_sparse.at[cf_ix, feature]
+            left = int(final_cfs_sparse.at[cf_ix, feature])
             right = query_instance[feature].iat[0]
 
             while left <= right:
@@ -646,7 +633,7 @@ class ExplainerBase(ABC):
 
         else:
             left = query_instance[feature].iat[0]
-            right = final_cfs_sparse.at[cf_ix, feature]
+            right = int(final_cfs_sparse.at[cf_ix, feature])
 
             while right >= left:
                 current_val = right - ((right - left)/2)
@@ -789,13 +776,6 @@ class ExplainerBase(ABC):
         else:
             return self.target_cf_range[0] <= model_score and model_score <= self.target_cf_range[1]
 
-    def decode_model_output(self, encoded_labels):
-        if self.model.model_type == ModelTypes.Classifier:
-            if hasattr(self.model.model, "classes_"):  # sklearn model
-                label_dict = {idx: label for idx, label in enumerate(self.model.model.classes_)}
-                return encoded_labels.apply(lambda x: label_dict[x])
-        return encoded_labels  # no op
-
     def get_model_output_from_scores(self, model_scores):
         if self.model.model_type == ModelTypes.Classifier:
             output_type = np.int32
@@ -841,7 +821,7 @@ class ExplainerBase(ABC):
         dataset_instance = self.data_interface.prepare_query_instance(
             query_instance=data_df_copy[self.data_interface.feature_names])
 
-        predictions = self.get_model_output_from_scores(self.model.get_output(dataset_instance, model_score=True)).flatten()
+        predictions = self.model.get_output(dataset_instance, model_score=False).flatten()
         # TODO: Is it okay to insert a column in the original dataframe with the predicted outcome? This is memory-efficient
         data_df_copy[predicted_outcome_name] = predictions
 
@@ -881,17 +861,6 @@ class ExplainerBase(ABC):
         if no_cf_generated:
             raise UserConfigValidationException(
                 "No counterfactuals found for any of the query points! Kindly check your configuration.")
-
-    def decode_to_original_labels(self, test_instance_df, final_cfs_df, final_cfs_df_sparse):
-        test_instance_df[self.data_interface.outcome_name] = \
-            self.decode_model_output(test_instance_df[self.data_interface.outcome_name])
-        if final_cfs_df is not None:
-            final_cfs_df[self.data_interface.outcome_name] = \
-                self.decode_model_output(final_cfs_df[self.data_interface.outcome_name])
-            if final_cfs_df_sparse is not None:
-                final_cfs_df_sparse[self.data_interface.outcome_name] = \
-                    self.decode_model_output(final_cfs_df_sparse[self.data_interface.outcome_name])
-        return test_instance_df, final_cfs_df, final_cfs_df_sparse
 
     def serialize_explainer(self, path):
         """Serialize the explainer to the file specified by path."""
